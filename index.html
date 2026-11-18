@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Cost–Quality Curve</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--ink:#14171f;--mute:#6b7280;--line:#e5e7eb;--accent:#4f46e5;--r:14px}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+header,main,footer{max-width:1200px;margin:0 auto;padding:0 20px}
+header{padding-top:32px}
+h1{font-size:1.75rem;margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--mute);margin:0 0 20px;max-width:70ch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px}
+.kpi small{color:var(--mute);display:block;font-size:.8rem}
+.kpi b{font-size:1.25rem;display:block;margin-top:2px}
+.kpi span{color:var(--mute);font-size:.85rem}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+input[type=search],select{font:inherit;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+input:focus-visible,select:focus-visible,button:focus-visible,th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 12px;font:inherit;font-size:.85rem;cursor:pointer;display:inline-flex;align-items:center;gap:6px;color:var(--ink)}
+.chip i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.chip[aria-pressed=false]{opacity:.45}
+.chartwrap{position:relative}
+svg{width:100%;height:auto;display:block}
+.tip{position:absolute;pointer-events:none;background:#14171f;color:#fff;padding:8px 10px;border-radius:8px;font-size:.8rem;opacity:0;transition:opacity .1s;white-space:nowrap;z-index:2}
+.legend{color:var(--mute);font-size:.8rem;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap}
+h2{font-size:1.05rem;margin:0 0 12px}
+.grid{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th button{all:unset;cursor:pointer;font-weight:600;color:var(--mute);font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+td.n{text-align:right;font-variant-numeric:tabular-nums}th.n{text-align:right}
+.badge{background:#eef2ff;color:var(--accent);border-radius:6px;padding:1px 7px;font-size:.75rem;font-weight:600}
+.bar{height:8px;border-radius:4px;background:#eef0f4;overflow:hidden;min-width:80px}.bar div{height:100%;background:var(--accent)}
+.rank li{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line);font-size:.9rem}
+.rank{list-style:none;margin:0;padding:0}
+.empty{padding:30px;text-align:center;color:var(--mute)}
+.note{color:var(--mute);font-size:.8rem;margin:12px 0}
+footer{padding:20px;text-align:center;color:#9aa0ab;font-size:.75rem}
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM Cost–Quality Curve</h1>
+  <p class="sub">Compare major language models on price versus quality. Models on the dashed line give the best quality you can get for their price.</p>
+</header>
+<main>
+  <section class="kpis" id="kpis" aria-label="Highlights"></section>
+
+  <section class="card" style="margin-bottom:12px">
+    <div class="controls">
+      <input type="search" id="q" placeholder="Search models…" aria-label="Search models">
+      <label>Price basis
+        <select id="basis" aria-label="Price basis">
+          <option value="blend">Blended (3:1 input:output)</option>
+          <option value="in">Input only</option>
+          <option value="out">Output only</option>
+        </select>
+      </label>
+      <label>Max price
+        <select id="max" aria-label="Maximum price">
+          <option value="1e9">Any</option><option value="20">≤ $20</option><option value="5">≤ $5</option><option value="1">≤ $1</option>
+        </select>
+      </label>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="Filter by provider"></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Price vs. quality</h2>
+      <div class="chartwrap" id="cw"><svg id="chart" viewBox="0 0 800 460" role="img" aria-label="Scatter chart of model price versus quality"></svg><div class="tip" id="tip"></div></div>
+      <div class="legend"><span>X: USD per 1M tokens (log scale)</span><span>Y: quality index (0–100)</span><span>– – Efficiency frontier</span></div>
+    </section>
+    <section class="card">
+      <h2>Best value (quality per $)</h2>
+      <ol class="rank" id="rank"></ol>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>All models</h2>
+    <div class="tablewrap"><table id="tbl"></table></div>
+    <div class="empty" id="empty" hidden>No models match these filters.</div>
+  </section>
+  <p class="note">Figures are an approximate snapshot of public list prices and an illustrative composite quality index, intended for relative comparison. Check each provider for current pricing.</p>
+</main>
+<footer>Built with AIT Foundry</footer>
+
+<script>
+const COL={OpenAI:"#10a37f",Anthropic:"#d97757",Google:"#4285f4",Meta:"#0866ff",DeepSeek:"#4f46e5",Mistral:"#f59e0b",xAI:"#111827",Alibaba:"#a855f7"};
+const M=[
+["GPT-4.1","OpenAI",2,8,83],["GPT-4.1 mini","OpenAI",.4,1.6,76],["GPT-4o","OpenAI",2.5,10,78],["GPT-4o mini","OpenAI",.15,.6,66],["o3-mini","OpenAI",1.1,4.4,80],["o1","OpenAI",15,60,88],
+["Claude Opus 4","Anthropic",15,75,90],["Claude Sonnet 4","Anthropic",3,15,87],["Claude 3.7 Sonnet","Anthropic",3,15,84],["Claude 3.5 Haiku","Anthropic",.8,4,68],
+["Gemini 2.5 Pro","Google",1.25,10,91],["Gemini 2.5 Flash","Google",.3,2.5,82],["Gemini 2.0 Flash","Google",.1,.4,72],
+["Llama 3.1 405B","Meta",3,3,74],["Llama 3.3 70B","Meta",.6,.6,67],
+["DeepSeek R1","DeepSeek",.55,2.19,84],["DeepSeek V3","DeepSeek",.27,1.1,76],
+["Mistral Large","Mistral",2,6,70],["Grok 3","xAI",3,15,82],["Qwen2.5 72B","Alibaba",.4,.4,66]
+].map(a=>({name:a[0],prov:a[1],in:a[2],out:a[3],q:a[4]}));
+const st={q:"",basis:"blend",max:1e9,on:new Set(Object.keys(COL)),sort:"q",dir:-1};
+const $=id=>document.getElementById(id);
+const price=m=>st.basis==="in"?m.in:st.basis==="out"?m.out:(m.in*3+m.out)/4;
+const fmt=p=>"$"+(p<1?p.toFixed(2):p.toFixed(p<10?2:1));
+function filtered(){return M.filter(m=>st.on.has(m.prov)&&m.name.toLowerCase().includes(st.q)&&price(m)<=st.max)}
+function frontier(l){const s=[...l].sort((a,b)=>price(a)-price(b)||b.q-a.q);const f=[];let best=-1;for(const m of s)if(m.q>best){f.push(m);best=m.q}return f}
+function chips(){$("chips").innerHTML=Object.keys(COL).map(p=>`<button class="chip" data-p="${p}" aria-pressed="${st.on.has(p)}"><i style="background:${COL[p]}"></i>${p}</button>`).join("")}
+function kpis(l){
+  if(!l.length){$("kpis").innerHTML="";return}
+  const top=[...l].sort((a,b)=>b.q-a.q)[0],cheap=[...l].sort((a,b)=>price(a)-price(b))[0],val=[...l].sort((a,b)=>b.q/price(b)-a.q/price(a))[0];
+  const avg=l.reduce((s,m)=>s+price(m),0)/l.length;
+  const k=(t,b,s)=>`<div class="card kpi"><small>${t}</small><b>${b}</b><span>${s}</span></div>`;
+  $("kpis").innerHTML=k("Highest quality",top.name,`Index ${top.q} · ${fmt(price(top))}/1M`)+k("Lowest price",cheap.name,`${fmt(price(cheap))}/1M · Index ${cheap.q}`)+k("Best value",val.name,`${(val.q/price(val)).toFixed(0)} points per $`)+k("Models shown",l.length,`Avg ${fmt(avg)}/1M tokens`);
+}
+function chart(l){
+  const W=800,H=460,L=52,R=20,T=16,B=48,svg=$("chart");
+  const xs=[0.05,0.1,0.2,0.5,1,2,5,10,20,50,100],x0=Math.log10(xs[0]),x1=Math.log10(xs[xs.length-1]);
+  const X=p=>L+(Math.log10(p)-x0)/(x1-x0)*(W-L-R),Y=q=>T+(1-(q-55)/(95-55))*(H-T-B);
+  let s="";
+  for(let q=55;q<=95;q+=10)s+=`<line x1="${L}" x2="${W-R}" y1="${Y(q)}" y2="${Y(q)}" stroke="#e5e7eb"/><text x="${L-8}" y="${Y(q)+4}" text-anchor="end" font-size="11" fill="#6b7280">${q}</text>`;
+  xs.forEach(v=>s+=`<line y1="${T}" y2="${H-B}" x1="${X(v)}" x2="${X(v)}" stroke="#f0f1f4"/><text x="${X(v)}" y="${H-B+18}" text-anchor="middle" font-size="11" fill="#6b7280">$${v}</text>`);
+  s+=`<text x="${(L+W-R)/2}" y="${H-8}" text-anchor="middle" font-size="12" fill="#6b7280">Price per 1M tokens (log)</text><text transform="translate(14 ${(T+H-B)/2}) rotate(-90)" text-anchor="middle" font-size="12" fill="#6b7280">Quality index</text>`;
+  const f=frontier(l);
+  if(f.length>1)s+=`<polyline fill="none" stroke="#4f46e5" stroke-width="2" stroke-dasharray="6 5" points="${f.map(m=>X(price(m))+","+Y(m.q)).join(" ")}"/>`;
+  const fs=new Set(f);
+  l.forEach(m=>{const i=M.indexOf(m);s+=`<g data-i="${i}" tabindex="0" role="img" aria-label="${m.name}, ${fmt(price(m))} per million tokens, quality ${m.q}"><circle cx="${X(price(m))}" cy="${Y(m.q)}" r="${fs.has(m)?9:7}" fill="${COL[m.prov]}" fill-opacity=".85" stroke="#fff" stroke-width="2"/><text x="${X(price(m))+11}" y="${Y(m.q)+4}" font-size="10.5" fill="#374151">${m.name}</text></g>`});
+  svg.innerHTML=s;
+  const tip=$("tip"),cw=$("cw");
+  svg.querySelectorAll("g[data-i]").forEach(g=>{
+    const show=e=>{const m=M[g.dataset.i],r=cw.getBoundingClientRect(),c=g.querySelector("circle").getBoundingClientRect();
+      tip.innerHTML=`<b>${m.name}</b> · ${m.prov}<br>Price ${fmt(price(m))}/1M · In ${fmt(m.in)} · Out ${fmt(m.out)}<br>Quality ${m.q}`;
+      tip.style.left=Math.min(c.left-r.left+14,r.width-230)+"px";tip.style.top=(c.top-r.top-52)+"px";tip.style.opacity=1};
+    g.onmouseenter=show;g.onfocus=show;g.onmouseleave=g.onblur=()=>tip.style.opacity=0;
+  });
+}
+function rank(l){$("rank").innerHTML=l.length?[...l].sort((a,b)=>b.q/price(b)-a.q/price(a)).slice(0,6).map((m,i)=>`<li><span>${i+1}. ${m.name}</span><b>${(m.q/price(m)).toFixed(0)}</b></li>`).join(""):`<li class="empty">Nothing to rank</li>`}
+function table(l){
+  const cols=[["name","Model"],["prov","Provider"],["in","Input $/1M","n"],["out","Output $/1M","n"],["p","Blended $/1M","n"],["q","Quality","n"],["v","Value","n"]];
+  const val=m=>({p:(m.in*3+m.out)/4,v:m.q/((m.in*3+m.out)/4)});
+  const key=m=>st.sort==="p"||st.sort==="v"?val(m)[st.sort]:m[st.sort];
+  const s=[...l].sort((a,b)=>{const x=key(a),y=key(b);return(typeof x==="string"?x.localeCompare(y):x-y)*st.dir});
+  const fs=new Set(frontier(l));
+  $("tbl").innerHTML=`<thead><tr>${cols.map(c=>`<th class="${c[2]||""}" aria-sort="${st.sort===c[0]?(st.dir>0?"ascending":"descending"):"none"}"><button data-s="${c[0]}">${c[1]}${st.sort===c[0]?(st.dir>0?" ▲":" ▼"):""}</button></th>`).join("")}</tr></thead><tbody>${s.map(m=>`<tr><td><b>${m.name}</b> ${fs.has(m)?'<span class="badge">Frontier</span>':""}</td><td><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${COL[m.prov]};margin-right:6px"></i>${m.prov}</td><td class="n">${fmt(m.in)}</td><td class="n">${fmt(m.out)}</td><td class="n">${fmt(val(m).p)}</td><td class="n"><div style="display:flex;gap:8px;align-items:center;justify-content:flex-end"><div class="bar"><div style="width:${m.q}%"></div></div>${m.q}</div></td><td class="n">${val(m).v.toFixed(0)}</td></tr>`).join("")}</tbody>`;
+  $("empty").hidden=l.length>0;
+}
+function render(){const l=filtered();kpis(l);chart(l);rank(l);table(l);chips()}
+$("q").oninput=e=>{st.q=e.target.value.toLowerCase().trim();render()};
+$("basis").onchange=e=>{st.basis=e.target.value;render()};
+$("max").onchange=e=>{st.max=+e.target.value;render()};
+$("chips").onclick=e=>{const b=e.target.closest(".chip");if(!b)return;const p=b.dataset.p;st.on.has(p)?st.on.delete(p):st.on.add(p);render()};
+$("tbl").onclick=e=>{const b=e.target.closest("button[data-s]");if(!b)return;const k=b.dataset.s;st.dir=st.sort===k?-st.dir:(k==="name"||k==="prov"?1:-1);st.sort=k;render()};
+render();
+</script>
+</body>
+</html>
